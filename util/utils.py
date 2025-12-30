@@ -59,12 +59,12 @@ def get_caption_model_processor(model_name, model_name_or_path="Salesforce/blip2
             model_name_or_path, device_map=None, torch_dtype=torch.float16
         ).to(device)
     elif model_name == "florence2":
-        from transformers import AutoProcessor, AutoModelForCausalLM 
+        from transformers import AutoProcessor, AutoModelForCausalLM
         processor = AutoProcessor.from_pretrained("microsoft/Florence-2-base", trust_remote_code=True)
         if device == 'cpu':
-            model = AutoModelForCausalLM.from_pretrained(model_name_or_path, torch_dtype=torch.float32, trust_remote_code=True)
+            model = AutoModelForCausalLM.from_pretrained(model_name_or_path, torch_dtype=torch.float32, trust_remote_code=True, attn_implementation="eager")
         else:
-            model = AutoModelForCausalLM.from_pretrained(model_name_or_path, torch_dtype=torch.float16, trust_remote_code=True).to(device)
+            model = AutoModelForCausalLM.from_pretrained(model_name_or_path, torch_dtype=torch.float16, trust_remote_code=True, attn_implementation="eager").to(device)
     return {'model': model.to(device), 'processor': processor}
 
 
@@ -73,6 +73,27 @@ def get_yolo_model(model_path):
     # Load the model.
     model = YOLO(model_path)
     return model
+
+
+def get_sam2_model(model_cfg, checkpoint_path, device='cuda'):
+    """
+    Load SAM2 model for automatic mask generation
+
+    Args:
+        model_cfg: Model configuration name (e.g., 'sam2_hiera_l.yaml')
+        checkpoint_path: Path to SAM2 checkpoint file
+        device: Device to load model on ('cuda' or 'cpu')
+
+    Returns:
+        SAM2AutomaticMaskGenerator instance
+    """
+    from sam2.build_sam import build_sam2
+    from sam2.automatic_mask_generator import SAM2AutomaticMaskGenerator
+
+    sam2_model = build_sam2(model_cfg, checkpoint_path, device=device)
+    mask_generator = SAM2AutomaticMaskGenerator(sam2_model)
+
+    return mask_generator
 
 
 @torch.inference_mode()
@@ -398,17 +419,74 @@ def predict_yolo(model, image, box_threshold, imgsz, scale_img, iou_threshold=0.
 
     return boxes, conf, phrases
 
+
+def predict_sam2(mask_generator, image, box_threshold=0.5, min_area=100):
+    """
+    Use SAM2 automatic mask generator to detect objects and extract bounding boxes
+
+    Args:
+        mask_generator: SAM2AutomaticMaskGenerator instance
+        image: PIL Image or numpy array
+        box_threshold: Minimum confidence score (predicted_iou) for masks
+        min_area: Minimum area for valid masks
+
+    Returns:
+        boxes: Tensor of bounding boxes in xyxy format (pixel space)
+        conf: Tensor of confidence scores
+        phrases: List of phrase identifiers
+    """
+    # Convert PIL Image to numpy array if needed
+    if isinstance(image, Image.Image):
+        image_np = np.array(image)
+    else:
+        image_np = image
+
+    # Generate masks
+    masks = mask_generator.generate(image_np)
+
+    # Filter masks by confidence and area
+    filtered_masks = [
+        m for m in masks
+        if m['predicted_iou'] >= box_threshold and m['area'] >= min_area
+    ]
+
+    # Sort by confidence (predicted_iou) in descending order
+    filtered_masks = sorted(filtered_masks, key=lambda x: x['predicted_iou'], reverse=True)
+
+    # Extract bounding boxes from masks
+    boxes = []
+    conf = []
+    for mask_data in filtered_masks:
+        bbox = mask_data['bbox']  # [x, y, w, h]
+        x, y, w, h = bbox
+        # Convert xywh to xyxy
+        boxes.append([x, y, x + w, y + h])
+        conf.append(mask_data['predicted_iou'])
+
+    if len(boxes) == 0:
+        # Return empty tensors if no masks found
+        boxes = torch.empty((0, 4))
+        conf = torch.empty((0,))
+    else:
+        boxes = torch.tensor(boxes, dtype=torch.float32)
+        conf = torch.tensor(conf, dtype=torch.float32)
+
+    phrases = [str(i) for i in range(len(boxes))]
+
+    return boxes, conf, phrases
+
 def int_box_area(box, w, h):
     x1, y1, x2, y2 = box
     int_box = [int(x1*w), int(y1*h), int(x2*w), int(y2*h)]
     area = (int_box[2] - int_box[0]) * (int_box[3] - int_box[1])
     return area
 
-def get_som_labeled_img(image_source: Union[str, Image.Image], model=None, BOX_TRESHOLD=0.01, output_coord_in_ratio=False, ocr_bbox=None, text_scale=0.4, text_padding=5, draw_bbox_config=None, caption_model_processor=None, ocr_text=[], use_local_semantics=True, iou_threshold=0.9,prompt=None, scale_img=False, imgsz=None, batch_size=128):
+def get_som_labeled_img(image_source: Union[str, Image.Image], model=None, BOX_TRESHOLD=0.01, output_coord_in_ratio=False, ocr_bbox=None, text_scale=0.4, text_padding=5, draw_bbox_config=None, caption_model_processor=None, ocr_text=[], use_local_semantics=True, iou_threshold=0.9,prompt=None, scale_img=False, imgsz=None, batch_size=128, model_type='yolo'):
     """Process either an image path or Image object
-    
+
     Args:
         image_source: Either a file path (str) or PIL Image object
+        model_type: 'yolo' or 'sam2' - type of detection model to use
         ...
     """
     if isinstance(image_source, str):
@@ -418,7 +496,12 @@ def get_som_labeled_img(image_source: Union[str, Image.Image], model=None, BOX_T
     if not imgsz:
         imgsz = (h, w)
     # print('image size:', w, h)
-    xyxy, logits, phrases = predict_yolo(model=model, image=image_source, box_threshold=BOX_TRESHOLD, imgsz=imgsz, scale_img=scale_img, iou_threshold=0.1)
+
+    # Choose prediction function based on model type
+    if model_type == 'sam2':
+        xyxy, logits, phrases = predict_sam2(mask_generator=model, image=image_source, box_threshold=BOX_TRESHOLD, min_area=100)
+    else:  # default to YOLO
+        xyxy, logits, phrases = predict_yolo(model=model, image=image_source, box_threshold=BOX_TRESHOLD, imgsz=imgsz, scale_img=scale_img, iou_threshold=0.1)
     xyxy = xyxy / torch.Tensor([w, h, w, h]).to(xyxy.device)
     image_source = np.asarray(image_source)
     phrases = [str(i) for i in range(len(phrases))]
