@@ -1,4 +1,4 @@
-from util.utils import get_som_labeled_img, check_ocr_box, get_caption_model_processor, get_sam2_model
+from util.utils import get_som_labeled_img, check_ocr_box, get_caption_model_processor, get_yolo_model
 import torch
 from PIL import Image
 import time
@@ -8,62 +8,14 @@ import io
 import pandas as pd
 import os
 from pathlib import Path
-import urllib.request
 
 # Device configuration
 device = 'cuda'
 
-# SAM2 model configuration
-# Available models and their download URLs
-SAM2_MODELS = {
-    'sam2_hiera_tiny': {
-        'config': 'sam2_hiera_t.yaml',
-        'url': 'https://dl.fbaipublicfiles.com/segment_anything_2/072824/sam2_hiera_tiny.pt',
-        'filename': 'sam2_hiera_tiny.pt'
-    },
-    'sam2_hiera_small': {
-        'config': 'sam2_hiera_s.yaml',
-        'url': 'https://dl.fbaipublicfiles.com/segment_anything_2/072824/sam2_hiera_small.pt',
-        'filename': 'sam2_hiera_small.pt'
-    },
-    'sam2_hiera_base_plus': {
-        'config': 'sam2_hiera_b+.yaml',
-        'url': 'https://dl.fbaipublicfiles.com/segment_anything_2/072824/sam2_hiera_base_plus.pt',
-        'filename': 'sam2_hiera_base_plus.pt'
-    },
-    'sam2_hiera_large': {
-        'config': 'sam2_hiera_l.yaml',
-        'url': 'https://dl.fbaipublicfiles.com/segment_anything_2/072824/sam2_hiera_large.pt',
-        'filename': 'sam2_hiera_large.pt'
-    }
-}
-
-# Select model (change this to use different model size)
-selected_model = 'sam2_hiera_small'  # Use small model for faster inference
-model_info = SAM2_MODELS[selected_model]
-model_cfg = model_info['config']
-checkpoint_path = f'weights/sam2/{model_info["filename"]}'
-
-# Create weights directory if it doesn't exist
-weights_dir = Path('weights/sam2')
-weights_dir.mkdir(parents=True, exist_ok=True)
-
-# Download checkpoint if it doesn't exist
-if not Path(checkpoint_path).exists():
-    print(f'Downloading SAM2 checkpoint: {selected_model}...')
-    print(f'This may take a few minutes depending on your internet connection.')
-    try:
-        urllib.request.urlretrieve(model_info['url'], checkpoint_path)
-        print(f'Download complete: {checkpoint_path}')
-    except Exception as e:
-        print(f'Error downloading checkpoint: {e}')
-        print('Please download manually from: https://github.com/facebookresearch/segment-anything-2')
-        raise
-
-# Load SAM2 model
-print('Loading SAM2 model...')
-som_model = get_sam2_model(model_cfg, checkpoint_path, device=device)
-print(f'SAM2 model loaded on {device}')
+# Load YOLO model
+print('Loading YOLO model...')
+som_model = get_yolo_model('weights/icon_detect/best.pt')
+print('YOLO model loaded')
 
 # Load caption model (fine-tuned blip2 or florence2)
 caption_model_processor = get_caption_model_processor(
@@ -123,7 +75,7 @@ dino_labled_img, label_coordinates, parsed_content_list = get_som_labeled_img(
     iou_threshold=0.7,
     scale_img=False,
     batch_size=128,
-    model_type='sam2'  # Use SAM2 instead of YOLO
+    model_type='yolo'
 )
 cur_time_caption = time.time()
 print(f"Caption time: {cur_time_caption - cur_time_ocr:.2f}s")

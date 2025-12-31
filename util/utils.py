@@ -75,27 +75,6 @@ def get_yolo_model(model_path):
     return model
 
 
-def get_sam2_model(model_cfg, checkpoint_path, device='cuda'):
-    """
-    Load SAM2 model for automatic mask generation
-
-    Args:
-        model_cfg: Model configuration name (e.g., 'sam2_hiera_l.yaml')
-        checkpoint_path: Path to SAM2 checkpoint file
-        device: Device to load model on ('cuda' or 'cpu')
-
-    Returns:
-        SAM2AutomaticMaskGenerator instance
-    """
-    from sam2.build_sam import build_sam2
-    from sam2.automatic_mask_generator import SAM2AutomaticMaskGenerator
-
-    sam2_model = build_sam2(model_cfg, checkpoint_path, device=device)
-    mask_generator = SAM2AutomaticMaskGenerator(sam2_model)
-
-    return mask_generator
-
-
 @torch.inference_mode()
 def get_parsed_content_icon(filtered_boxes, starting_idx, image_source, caption_model_processor, prompt=None, batch_size=128):
     # Number of samples per batch, --> 128 roughly takes 4 GB of GPU memory for florence v2 model
@@ -420,61 +399,6 @@ def predict_yolo(model, image, box_threshold, imgsz, scale_img, iou_threshold=0.
     return boxes, conf, phrases
 
 
-def predict_sam2(mask_generator, image, box_threshold=0.5, min_area=100):
-    """
-    Use SAM2 automatic mask generator to detect objects and extract bounding boxes
-
-    Args:
-        mask_generator: SAM2AutomaticMaskGenerator instance
-        image: PIL Image or numpy array
-        box_threshold: Minimum confidence score (predicted_iou) for masks
-        min_area: Minimum area for valid masks
-
-    Returns:
-        boxes: Tensor of bounding boxes in xyxy format (pixel space)
-        conf: Tensor of confidence scores
-        phrases: List of phrase identifiers
-    """
-    # Convert PIL Image to numpy array if needed
-    if isinstance(image, Image.Image):
-        image_np = np.array(image)
-    else:
-        image_np = image
-
-    # Generate masks
-    masks = mask_generator.generate(image_np)
-
-    # Filter masks by confidence and area
-    filtered_masks = [
-        m for m in masks
-        if m['predicted_iou'] >= box_threshold and m['area'] >= min_area
-    ]
-
-    # Sort by confidence (predicted_iou) in descending order
-    filtered_masks = sorted(filtered_masks, key=lambda x: x['predicted_iou'], reverse=True)
-
-    # Extract bounding boxes from masks
-    boxes = []
-    conf = []
-    for mask_data in filtered_masks:
-        bbox = mask_data['bbox']  # [x, y, w, h]
-        x, y, w, h = bbox
-        # Convert xywh to xyxy
-        boxes.append([x, y, x + w, y + h])
-        conf.append(mask_data['predicted_iou'])
-
-    if len(boxes) == 0:
-        # Return empty tensors if no masks found
-        boxes = torch.empty((0, 4))
-        conf = torch.empty((0,))
-    else:
-        boxes = torch.tensor(boxes, dtype=torch.float32)
-        conf = torch.tensor(conf, dtype=torch.float32)
-
-    phrases = [str(i) for i in range(len(boxes))]
-
-    return boxes, conf, phrases
-
 def int_box_area(box, w, h):
     x1, y1, x2, y2 = box
     int_box = [int(x1*w), int(y1*h), int(x2*w), int(y2*h)]
@@ -486,7 +410,7 @@ def get_som_labeled_img(image_source: Union[str, Image.Image], model=None, BOX_T
 
     Args:
         image_source: Either a file path (str) or PIL Image object
-        model_type: 'yolo' or 'sam2' - type of detection model to use
+        model_type: 'yolo' - type of detection model to use
         ...
     """
     if isinstance(image_source, str):
@@ -497,11 +421,8 @@ def get_som_labeled_img(image_source: Union[str, Image.Image], model=None, BOX_T
         imgsz = (h, w)
     # print('image size:', w, h)
 
-    # Choose prediction function based on model type
-    if model_type == 'sam2':
-        xyxy, logits, phrases = predict_sam2(mask_generator=model, image=image_source, box_threshold=BOX_TRESHOLD, min_area=100)
-    else:  # default to YOLO
-        xyxy, logits, phrases = predict_yolo(model=model, image=image_source, box_threshold=BOX_TRESHOLD, imgsz=imgsz, scale_img=scale_img, iou_threshold=0.1)
+    # Use YOLO for prediction
+    xyxy, logits, phrases = predict_yolo(model=model, image=image_source, box_threshold=BOX_TRESHOLD, imgsz=imgsz, scale_img=scale_img, iou_threshold=0.1)
     xyxy = xyxy / torch.Tensor([w, h, w, h]).to(xyxy.device)
     image_source = np.asarray(image_source)
     phrases = [str(i) for i in range(len(phrases))]
