@@ -105,7 +105,11 @@ def get_ui_detr_model(model_path, resolution=1600, device='cuda'):
 def get_parsed_content_icon(filtered_boxes, starting_idx, image_source, caption_model_processor, prompt=None, batch_size=128):
     # Number of samples per batch, --> 128 roughly takes 4 GB of GPU memory for florence v2 model
     to_pil = ToPILImage()
-    if starting_idx:
+    # starting_idx == -1 means no boxes with content=None
+    if starting_idx == -1:
+        return []
+    # starting_idx >= 0: slice from that index
+    if starting_idx > 0:
         non_ocr_boxes = filtered_boxes[starting_idx:]
     else:
         non_ocr_boxes = filtered_boxes
@@ -525,7 +529,10 @@ def get_som_labeled_img(image_source: Union[str, Image.Image], model=None, BOX_T
         # fill the filtered_boxes_elem None content with parsed_content_icon in order
         for i, box in enumerate(filtered_boxes_elem):
             if box['content'] is None:
-                box['content'] = parsed_content_icon.pop(0)
+                if parsed_content_icon:
+                    box['content'] = parsed_content_icon.pop(0)
+                else:
+                    box['content'] = "unknown"  # fallback if caption failed
         for i, txt in enumerate(parsed_content_icon):
             parsed_content_icon_ls.append(f"Icon Box ID {str(i+icon_start)}: {txt}")
         parsed_content_merged = ocr_text + parsed_content_icon_ls
