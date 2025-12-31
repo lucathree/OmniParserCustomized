@@ -28,6 +28,9 @@ paddle_ocr = PaddleOCR(
     max_batch_size=1024,
     use_dilation=True,  # improves accuracy
     det_db_score_mode='slow',  # improves accuracy
+    det_db_box_thresh=0.5,  # lower = detect more text boxes
+    det_db_thresh=0.3,  # lower = more sensitive text detection
+    det_db_unclip_ratio=1.5,  # higher = expand text regions
     rec_batch_num=1024)
 import time
 import base64
@@ -72,6 +75,29 @@ def get_yolo_model(model_path):
     from ultralytics import YOLO
     # Load the model.
     model = YOLO(model_path)
+    return model
+
+
+def get_ui_detr_model(model_path, resolution=1600, device='cuda'):
+    """
+    Load UI-DETR-1 model (RF-DETR-Medium architecture)
+
+    Args:
+        model_path: Path to the model weights file (.pth)
+        resolution: Input resolution for the model (default: 1600)
+        device: Device to load model on ('cuda' or 'cpu')
+
+    Returns:
+        RFDETRMedium model instance
+    """
+    from rfdetr.detr import RFDETRMedium
+
+    model = RFDETRMedium(pretrain_weights=model_path, resolution=resolution)
+    try:
+        model.optimize_for_inference()
+    except RuntimeError as e:
+        print(f"Warning: Could not optimize model for inference: {e}")
+        print("Continuing without optimization...")
     return model
 
 
@@ -301,9 +327,9 @@ def remove_overlap_new(boxes, iou_threshold, ocr_bbox=None):
                             continue
                 if not box_added:
                     if ocr_labels:
-                        filtered_boxes.append({'type': 'icon', 'bbox': box1_elem['bbox'], 'interactivity': True, 'content': ocr_labels, 'source':'box_yolo_content_ocr'})
+                        filtered_boxes.append({'type': 'icon', 'bbox': box1_elem['bbox'], 'interactivity': True, 'content': ocr_labels, 'source':'box_detector_content_ocr'})
                     else:
-                        filtered_boxes.append({'type': 'icon', 'bbox': box1_elem['bbox'], 'interactivity': True, 'content': None, 'source':'box_yolo_content_yolo'})
+                        filtered_boxes.append({'type': 'icon', 'bbox': box1_elem['bbox'], 'interactivity': True, 'content': None, 'source':'box_detector_content_caption'})
             else:
                 filtered_boxes.append(box1)
     return filtered_boxes # torch.tensor(filtered_boxes)
@@ -399,6 +425,42 @@ def predict_yolo(model, image, box_threshold, imgsz, scale_img, iou_threshold=0.
     return boxes, conf, phrases
 
 
+def predict_ui_detr(model, image, box_threshold=0.35):
+    """
+    Use UI-DETR-1 (RF-DETR-Medium) model for UI element detection
+
+    Args:
+        model: RFDETRMedium model instance
+        image: PIL Image or numpy array (RGB)
+        box_threshold: Confidence threshold for detection (default: 0.35)
+
+    Returns:
+        boxes: Tensor of bounding boxes in xyxy format (pixel space)
+        conf: Tensor of confidence scores
+        phrases: List of phrase identifiers
+    """
+    # Convert PIL Image to numpy array if needed
+    if isinstance(image, Image.Image):
+        image_np = np.array(image)
+    else:
+        image_np = image
+
+    # Run detection
+    detections = model.predict(image_np, threshold=box_threshold)
+
+    # Get results
+    if len(detections.xyxy) == 0:
+        boxes = torch.empty((0, 4))
+        conf = torch.empty((0,))
+    else:
+        boxes = torch.tensor(detections.xyxy, dtype=torch.float32)
+        conf = torch.tensor(detections.confidence, dtype=torch.float32)
+
+    phrases = [str(i) for i in range(len(boxes))]
+
+    return boxes, conf, phrases
+
+
 def int_box_area(box, w, h):
     x1, y1, x2, y2 = box
     int_box = [int(x1*w), int(y1*h), int(x2*w), int(y2*h)]
@@ -410,7 +472,7 @@ def get_som_labeled_img(image_source: Union[str, Image.Image], model=None, BOX_T
 
     Args:
         image_source: Either a file path (str) or PIL Image object
-        model_type: 'yolo' - type of detection model to use
+        model_type: 'yolo' or 'ui_detr' - type of detection model to use
         ...
     """
     if isinstance(image_source, str):
@@ -421,8 +483,11 @@ def get_som_labeled_img(image_source: Union[str, Image.Image], model=None, BOX_T
         imgsz = (h, w)
     # print('image size:', w, h)
 
-    # Use YOLO for prediction
-    xyxy, logits, phrases = predict_yolo(model=model, image=image_source, box_threshold=BOX_TRESHOLD, imgsz=imgsz, scale_img=scale_img, iou_threshold=0.1)
+    # Choose prediction function based on model type
+    if model_type == 'ui_detr':
+        xyxy, logits, phrases = predict_ui_detr(model=model, image=image_source, box_threshold=BOX_TRESHOLD)
+    else:  # default to YOLO
+        xyxy, logits, phrases = predict_yolo(model=model, image=image_source, box_threshold=BOX_TRESHOLD, imgsz=imgsz, scale_img=scale_img, iou_threshold=0.1)
     xyxy = xyxy / torch.Tensor([w, h, w, h]).to(xyxy.device)
     image_source = np.asarray(image_source)
     phrases = [str(i) for i in range(len(phrases))]

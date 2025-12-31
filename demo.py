@@ -1,4 +1,4 @@
-from util.utils import get_som_labeled_img, check_ocr_box, get_caption_model_processor, get_yolo_model
+from util.utils import get_som_labeled_img, check_ocr_box, get_caption_model_processor, get_ui_detr_model
 import torch
 from PIL import Image
 import time
@@ -6,16 +6,15 @@ import base64
 import matplotlib.pyplot as plt
 import io
 import pandas as pd
-import os
 from pathlib import Path
 
 # Device configuration
 device = 'cuda'
 
-# Load YOLO model
-print('Loading YOLO model...')
-som_model = get_yolo_model('weights/icon_detect/model.pt')
-print('YOLO model loaded')
+# Load UI-DETR model
+print('Loading UI-DETR model...')
+som_model = get_ui_detr_model('weights/ui_detr/model.pth', resolution=1600, device=device)
+print('UI-DETR model loaded')
 
 # Load caption model (fine-tuned blip2 or florence2)
 caption_model_processor = get_caption_model_processor(
@@ -45,7 +44,7 @@ draw_bbox_config = {
     'text_padding': max(int(3 * box_overlay_ratio), 1),
     'thickness': max(int(3 * box_overlay_ratio), 1),
 }
-BOX_TRESHOLD = 0.05
+BOX_TRESHOLD = 0.35  # UI-DETR recommended threshold
 
 # OCR processing
 start = time.time()
@@ -75,7 +74,7 @@ dino_labled_img, label_coordinates, parsed_content_list = get_som_labeled_img(
     iou_threshold=0.7,
     scale_img=False,
     batch_size=128,
-    model_type='yolo'
+    model_type='ui_detr'
 )
 cur_time_caption = time.time()
 print(f"Caption time: {cur_time_caption - cur_time_ocr:.2f}s")

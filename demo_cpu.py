@@ -6,12 +6,18 @@ import time
 from pathlib import Path
 import pandas as pd
 
-# Configuration for CPU-only environment
+# Configuration for CPU-only environment (using UI-DETR)
 config = {
-    'som_model_path': 'weights/icon_detect/model.pt',
+    'som_model_path': 'weights/ui_detr/model.pth',
     'caption_model_name': 'florence2',
     'caption_model_path': 'weights/icon_caption_florence',
-    'BOX_TRESHOLD': 0.05
+    'model_type': 'ui_detr',
+    'ui_detr_resolution': 1600,
+    # Detection settings
+    'BOX_TRESHOLD': 0.35,
+    # OCR settings
+    'ocr_text_threshold': 0.5,
+    'use_paddleocr': True,
 }
 
 # Initialize Omniparser
@@ -21,7 +27,7 @@ parser = Omniparser(config)
 print(f'Initialization time: {time.time() - start_init:.2f}s')
 
 # Image path to analyze
-image_path = 'imgs/excel.png'
+image_path = 'imgs/pdp.png'
 # image_path = 'imgs/windows_home.png'
 # image_path = 'imgs/windows_multitab.png'
 

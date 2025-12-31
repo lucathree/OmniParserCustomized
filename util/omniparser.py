@@ -1,23 +1,40 @@
-from util.utils import get_som_labeled_img, get_caption_model_processor, get_yolo_model, check_ocr_box
+from util.utils import get_som_labeled_img, get_caption_model_processor, get_yolo_model, get_ui_detr_model, check_ocr_box
 import torch
 from PIL import Image
 import io
 import base64
 from typing import Dict
+
+
 class Omniparser(object):
     def __init__(self, config: Dict):
         self.config = config
         device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        self.model_type = config.get('model_type', 'ui_detr')
 
-        self.som_model = get_yolo_model(model_path=config['som_model_path'])
-        self.caption_model_processor = get_caption_model_processor(model_name=config['caption_model_name'], model_name_or_path=config['caption_model_path'], device=device)
+        if self.model_type == 'ui_detr':
+            resolution = config.get('ui_detr_resolution', 1600)
+            self.som_model = get_ui_detr_model(
+                model_path=config['som_model_path'],
+                resolution=resolution,
+                device=device
+            )
+            print(f'UI-DETR model loaded (resolution: {resolution})')
+        else:
+            self.som_model = get_yolo_model(model_path=config['som_model_path'])
+            print('YOLO model loaded')
+
+        self.caption_model_processor = get_caption_model_processor(
+            model_name=config['caption_model_name'],
+            model_name_or_path=config['caption_model_path'],
+            device=device
+        )
         print('Omniparser initialized!!!')
 
     def parse(self, image_base64: str):
         image_bytes = base64.b64decode(image_base64)
         image = Image.open(io.BytesIO(image_bytes))
         print('image size:', image.size)
-        
         box_overlay_ratio = max(image.size) / 3200
         draw_bbox_config = {
             'text_scale': 0.8 * box_overlay_ratio,
@@ -26,7 +43,31 @@ class Omniparser(object):
             'thickness': max(int(3 * box_overlay_ratio), 1),
         }
 
-        (text, ocr_bbox), _ = check_ocr_box(image, display_img=False, output_bb_format='xyxy', easyocr_args={'text_threshold': 0.8}, use_paddleocr=False)
-        dino_labled_img, label_coordinates, parsed_content_list = get_som_labeled_img(image, self.som_model, BOX_TRESHOLD = self.config['BOX_TRESHOLD'], output_coord_in_ratio=True, ocr_bbox=ocr_bbox,draw_bbox_config=draw_bbox_config, caption_model_processor=self.caption_model_processor, ocr_text=text,use_local_semantics=True, iou_threshold=0.7, scale_img=False, batch_size=128)
+        ocr_text_threshold = self.config.get('ocr_text_threshold', 0.5)
+        use_paddleocr = self.config.get('use_paddleocr', True)
+
+        (text, ocr_bbox), _ = check_ocr_box(
+            image,
+            display_img=False,
+            output_bb_format='xyxy',
+            easyocr_args={'text_threshold': ocr_text_threshold, 'paragraph': True},
+            use_paddleocr=use_paddleocr
+        )
+
+        dino_labled_img, label_coordinates, parsed_content_list = get_som_labeled_img(
+            image,
+            self.som_model,
+            BOX_TRESHOLD=self.config['BOX_TRESHOLD'],
+            output_coord_in_ratio=True,
+            ocr_bbox=ocr_bbox,
+            draw_bbox_config=draw_bbox_config,
+            caption_model_processor=self.caption_model_processor,
+            ocr_text=text,
+            use_local_semantics=True,
+            iou_threshold=0.7,
+            scale_img=False,
+            batch_size=128,
+            model_type=self.model_type
+        )
 
         return dino_labled_img, parsed_content_list
