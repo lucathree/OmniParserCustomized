@@ -14,7 +14,7 @@ device = 'cuda'
 
 # Load YOLO model
 print('Loading YOLO model...')
-som_model = get_yolo_model('weights/icon_detect/best.pt')
+som_model = get_yolo_model('weights/icon_detect/model.pt')
 print('YOLO model loaded')
 
 # Load caption model (fine-tuned blip2 or florence2)
